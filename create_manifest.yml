@@ -1,0 +1,89 @@
+---
+- name: Create and Install AAP Subscription Manifest
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # Login to your Red Hat Account and retrieve from https://access.redhat.com/management/api 
+    rhsm_offline_token: ""
+    # number of results to read at one time from the subscription API.  Max is 50.
+    result_limit: 50
+    # List of Subscription SKU's you wish to add to the manifest
+    aap_sku_list:
+      - "MCT4630"
+      - "MCT4630F3"
+      - "MW02049"
+    # Name of the manifest on access.redhat.com
+    manifest_name: "my_manifest"
+    # access.redhat.com user name
+    rhn_user: ""
+    # access.redhat.com password
+    rhn_password: ""
+    # quantity of entitlements of each subscription to add to the manifest
+    node_quantity: 1
+    # AAP FQDN or IP Address
+    aap_hostname: ""
+    # AAP User that can upload the manifest, usually admin
+    aap_user: ""
+    # AAP User's password
+    aap_password: ""
+
+  tasks:
+    - name: Get Access Token
+      ansible.builtin.uri:
+        url: "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: refresh_token
+          client_id: rhsm-api
+          refresh_token: "{{ rhsm_offline_token }}"
+        return_content: true
+      register: access_token_response
+
+    - name: Pull First Page of Subscriptions
+      ansible.builtin.include_tasks: api_pagination.yml
+
+    - name: Capture AAP Pool IDs
+      ansible.builtin.set_fact:
+        aap_pool_ids: "{{ (aap_pool_ids | default([])) + (all_subscriptions | selectattr('sku', 'equalto', aap_sku) | map(attribute='pools') | flatten | map(attribute='id') | list) }}"
+      loop: "{{ aap_sku_list }}"
+      loop_control:
+        loop_var: aap_sku
+      when: all_subscriptions | selectattr('sku', 'equalto', aap_sku) | length > 0
+
+    - name: Display Subscriptions
+      ansible.builtin.debug:
+        var: aap_pool_ids
+
+    - name: Fail when subscriptions are empty
+      ansible.builtin.fail:
+        msg: "No subscriptions available at this time. Ending job."
+      when: aap_pool_ids is not defined or aap_pool_ids | length == 0
+
+    - name: Create a Subscription Manifest
+      redhat.satellite.redhat_manifest:
+        name: "{{ manifest_name }}_aap"
+        username: "{{ redhat_user }}"
+        password: "{{ redhat_password }}"
+        quantity: "{{ node_quantity | int }}"
+        pool_id: "{{ pool_id }}"
+        validate_certs: false
+      loop: "{{ aap_pool_ids }}"
+      loop_control:
+        loop_var: pool_id
+
+    - name: Download subscription manifest
+      redhat.satellite.redhat_manifest:
+        name: "{{ manifest_name }}_aap"
+        username: "{{ redhat_user }}"
+        password: "{{ redhat_password }}"
+        path: /tmp/manifest.zip
+        validate_certs: false
+
+    - name: Upload the subscription manifest
+      ansible.controller.license:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_user }}"
+        controller_password: "{{ aap_password }}"
+        manifest: /tmp/manifest.zip
+        validate_certs: false

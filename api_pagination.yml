@@ -1,0 +1,25 @@
+---
+- name: Get Subscriptions
+  ansible.builtin.uri:
+    url: "https://api.access.redhat.com/management/v1/subscriptions?limit={{ result_limit }}&offset={{ offset | default('0') }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ access_token_response.json.access_token }}"
+      accept: application/json
+    return_content: true
+  register: subscription_response
+
+- name: Run Until There are no more Responses
+  when: subscription_response.json.body | length > 0
+  block:
+    - name: Capture Subscriptions
+      ansible.builtin.set_fact:
+        all_subscriptions: "{{ all_subscriptions | default([]) + subscription_response.json.body }}"
+
+    - name: Increment Offset
+      ansible.builtin.set_fact:
+        offset: "{{ ((offset | default(0)) | int + result_limit | int) }}"
+
+    - name: "Pull Next Page of Subscriptions, Offset {{ offset }}"
+      ansible.builtin.include_tasks:
+        file: api_pagination.yml
